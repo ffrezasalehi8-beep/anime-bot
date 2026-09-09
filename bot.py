@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv("BOT_TOKEN")
 ANILIST_URL = "https://graphql.anilist.co"
 
+# هدر سفارشی برای دور زدن بلاک آی‌پی‌های دیتاپسنتر در AniList
+HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
 def clean_html(raw_html: str | None) -> str:
     if not raw_html:
         return "توضیحاتی ثبت نشده است."
@@ -27,15 +34,12 @@ def clean_html(raw_html: str | None) -> str:
     return clean_text
 
 async def fetch_anilist(query: str, variables: dict) -> dict | None:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         try:
             response = await client.post(
                 ANILIST_URL,
                 json={"query": query, "variables": variables},
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                }
+                headers=HEADERS
             )
             if response.status_code == 200:
                 res_json = response.json()
@@ -327,3 +331,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
