@@ -26,6 +26,7 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         url = f"https://api.jikan.moe/v4/anime?q={name}&limit=1"
         data = requests.get(url, timeout=15).json()
+        
         await update.message.reply_text(str(data))
 return
         if not data["data"]:
