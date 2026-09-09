@@ -5,6 +5,7 @@ import os
 
 TOKEN = os.getenv("BOT_TOKEN")
 
+# ---------------- START ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -14,6 +15,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/top"
     )
 
+# ---------------- ANIME ----------------
 
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -51,13 +53,23 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data = response.json()
 
-        media = data["data"]["Media"]
+        media = data.get("data", {}).get("Media")
 
-        title = media["title"]["english"] or media["title"]["romaji"]
-        episodes = media["episodes"]
-        score = media["averageScore"]
-        status = media["status"]
-        image = media["coverImage"]["large"]
+        if not media:
+            await update.message.reply_text("انیمه پیدا نشد")
+            return
+
+        title = (
+            media.get("title", {}).get("english")
+            or media.get("title", {}).get("romaji")
+            or "Unknown"
+        )
+
+        episodes = media.get("episodes", "نامشخص")
+        score = media.get("averageScore", "نامشخص")
+        status = media.get("status", "نامشخص")
+
+        image = media.get("coverImage", {}).get("large")
 
         text = (
             f"🎬 {title}\n\n"
@@ -66,14 +78,18 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📡 وضعیت: {status}"
         )
 
-        await update.message.reply_photo(
-            photo=image,
-            caption=text
-        )
+        if image:
+            await update.message.reply_photo(
+                photo=image,
+                caption=text
+            )
+        else:
+            await update.message.reply_text(text)
 
     except Exception as e:
         await update.message.reply_text(f"خطا:\n{e}")
 
+# ---------------- RECOMMEND ----------------
 
 async def recommend(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -113,24 +129,46 @@ async def recommend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data = response.json()
 
-        recs = data["data"]["Media"]["recommendations"]["nodes"]
+        media = data.get("data", {}).get("Media")
 
-        if not recs:
+        if not media:
+            await update.message.reply_text("انیمه پیدا نشد")
+            return
+
+        nodes = media.get("recommendations", {}).get("nodes", [])
+
+        if not nodes:
             await update.message.reply_text("پیشنهادی پیدا نشد")
             return
 
         text = "🎌 انیمه‌های مشابه:\n\n"
 
-        for i, item in enumerate(recs[:10], start=1):
-            anime = item["mediaRecommendation"]
-            title = anime["english"] or anime["romaji"]
-            text += f"{i}. {title}\n"
+        count = 0
+
+        for item in nodes:
+            rec = item.get("mediaRecommendation")
+
+            if not rec:
+                continue
+
+            title = (
+                rec.get("title", {}).get("english")
+                or rec.get("title", {}).get("romaji")
+                or "Unknown"
+            )
+
+            count += 1
+            text += f"{count}. {title}\n"
+
+            if count >= 10:
+                break
 
         await update.message.reply_text(text)
 
     except Exception as e:
         await update.message.reply_text(f"خطا:\n{e}")
 
+# ---------------- TOP ----------------
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -156,12 +194,17 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data = response.json()
 
-        media = data["data"]["Page"]["media"]
+        media_list = data.get("data", {}).get("Page", {}).get("media", [])
 
         text = "🏆 10 انیمه برتر:\n\n"
 
-        for i, anime in enumerate(media, start=1):
-            title = anime["title"]["english"] or anime["title"]["romaji"]
+        for i, anime in enumerate(media_list, start=1):
+            title = (
+                anime.get("title", {}).get("english")
+                or anime.get("title", {}).get("romaji")
+                or "Unknown"
+            )
+
             text += f"{i}. {title}\n"
 
         await update.message.reply_text(text)
@@ -169,6 +212,7 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"خطا:\n{e}")
 
+# ---------------- APP ----------------
 
 app = Application.builder().token(TOKEN).build()
 
