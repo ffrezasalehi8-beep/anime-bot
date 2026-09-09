@@ -2,12 +2,10 @@ import os
 import logging
 import html
 import re
-from datetime import datetime
 import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# تنظیمات Logging برای Railway
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -15,37 +13,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("BOT_TOKEN")
-ANILIST_URL = "https://graphql.anilist.co"
+KITSU_BASE_URL = "https://kitsu.io/api/edge"
 
-# هدر سفارشی برای دور زدن بلاک آی‌پی‌های دیتاپسنتر در AniList
 HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "Accept": "application/vnd.api+json",
+    "Content-Type": "application/vnd.api+json",
+    "User-Agent": "TelegramBot/1.0"
 }
 
-def clean_html(raw_html: str | None) -> str:
-    if not raw_html:
+def clean_text(text: str | None) -> str:
+    if not text:
         return "توضیحاتی ثبت نشده است."
-    clean_text = re.sub(r'<[^>]*>', '', raw_html)
-    clean_text = html.unescape(clean_text)
-    if len(clean_text) > 700:
-        clean_text = clean_text[:700] + "..."
-    return clean_text
+    clean = re.sub(r'<[^>]*>', '', text)
+    clean = html.unescape(clean)
+    if len(clean) > 700:
+        clean = clean[:700] + "..."
+    return clean
 
-async def fetch_anilist(query: str, variables: dict) -> dict | None:
+async def fetch_kitsu(endpoint: str, params: dict = None) -> dict | None:
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         try:
-            response = await client.post(
-                ANILIST_URL,
-                json={"query": query, "variables": variables},
-                headers=HEADERS
-            )
+            response = await client.get(f"{KITSU_BASE_URL}/{endpoint}", params=params, headers=HEADERS)
             if response.status_code == 200:
-                res_json = response.json()
-                return res_json.get("data")
+                return response.json()
             else:
-                logger.error(f"AniList API Status {response.status_code}: {response.text}")
+                logger.error(f"Kitsu API Error {response.status_code}: {response.text}")
                 return None
         except Exception as e:
             logger.error(f"HTTP Request exception: {e}")
@@ -54,14 +46,14 @@ async def fetch_anilist(query: str, variables: dict) -> dict | None:
 # 1. /start
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "👋 <b>به ربات اطلاعات انیمه و مانگا خوش آمدید!</b>\n\n"
+        "👋 <b>به ربات اطلاعات انیمه و مانگا خوش آمدید! (داده‌ها از Kitsu)</b>\n\n"
         "دستورات فعال:\n"
         "🔹 <code>/anime نام</code> - جستجوی انیمه\n"
         "🔹 <code>/manga نام</code> - جستجوی مانگا\n"
         "🔹 <code>/character نام</code> - جستجوی شخصیت\n"
         "🔹 <code>/recommend نام</code> - ۱۰ انیمه پیشنهادی مشابه\n"
-        "🔹 <code>/top</code> - ۱۰ انیمه برتر تاریخ\n"
-        "🔹 <code>/season</code> - انیمه‌های فصل جاری"
+        "🔹 <code>/top</code> - ۱۰ انیمه برتر\n"
+        "🔹 <code>/season</code> - انیمه‌های محبوب فصل"
     )
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
@@ -72,42 +64,30 @@ async def anime_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query_str = " ".join(context.args)
-    gql_query = """
-    query ($search: String) {
-      Media (search: $search, type: ANIME) {
-        title { english romaji native }
-        coverImage { extraLarge }
-        meanScore
-        episodes
-        status
-        description
-      }
-    }
-    """
-    
-    data = await fetch_anilist(gql_query, {"search": query_str})
-    if not data or not data.get("Media"):
+    data = await fetch_kitsu("anime", {"filter[text]": query_str, "page[limit]": 1})
+
+    if not data or not data.get("data"):
         await update.message.reply_text("❌ انیمه‌ای با این نام یافت نشد.")
         return
 
-    media = data["Media"]
-    title = media.get("title", {}).get("english") or media.get("title", {}).get("romaji") or "نامشخص"
-    score = f"{media.get('meanScore')}/100" if media.get("meanScore") else "ثبت نشده"
-    episodes = media.get("episodes") or "نامشخص"
-    status = media.get("status") or "نامشخص"
-    description = clean_html(media.get("description"))
-    cover_url = media.get("coverImage", {}).get("extraLarge")
+    anime = data["data"][0]["attributes"]
+    title = anime.get("canonicalTitle") or anime.get("titles", {}).get("en") or "نامشخص"
+    score = f"{anime.get('averageRating')}/100" if anime.get("averageRating") else "ثبت نشده"
+    episodes = anime.get("episodeCount") or "نامشخص"
+    status = anime.get("status") or "نامشخص"
+    synopsis = clean_text(anime.get("synopsis"))
+    poster_url = anime.get("posterImage", {}).get("original") or anime.get("posterImage", {}).get("large")
 
     caption = (
         f"🎬 <b>{html.escape(str(title))}</b>\n\n"
         f"⭐️ <b>امتیاز:</b> {score}\n"
         f"🎞 <b>تعداد قسمت‌ها:</b> {episodes}\n"
         f"📌 <b>وضعیت پخش:</b> {status}\n\n"
-        f"📖 <b>خلاصه داستان:</b>\n{html.escape(description)}"
+        f"📖 <b>خلاصه داستان:</b>\n{html.escape(synopsis)}"
     )
 
-    if cover_url:
-        await update.message.reply_photo(photo=cover_url, caption=caption, parse_mode="HTML")
+    if poster_url:
+        await update.message.reply_photo(photo=poster_url, caption=caption, parse_mode="HTML")
     else:
         await update.message.reply_text(caption, parse_mode="HTML")
 
@@ -118,107 +98,83 @@ async def recommend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query_str = " ".join(context.args)
-    gql_query = """
-    query ($search: String) {
-      Media (search: $search, type: ANIME) {
-        title { romaji english }
-        recommendations (perPage: 10) {
-          nodes {
-            mediaRecommendation {
-              title { romaji english }
-              meanScore
-            }
-          }
-        }
-      }
-    }
-    """
-    
-    data = await fetch_anilist(gql_query, {"search": query_str})
-    if not data or not data.get("Media"):
-        await update.message.reply_text("❌ انیمه‌ای یافت نشد.")
+    search_data = await fetch_kitsu("anime", {"filter[text]": query_str, "page[limit]": 1})
+
+    if not search_data or not search_data.get("data"):
+        await update.message.reply_text("❌ انیمه مورد نظر پیدا نشد.")
         return
 
-    media = data["Media"]
-    main_title = media.get("title", {}).get("english") or media.get("title", {}).get("romaji") or "انیمه"
-    recs = media.get("recommendations", {}).get("nodes", [])
+    anime_id = search_data["data"][0]["id"]
+    main_title = search_data["data"][0]["attributes"].get("canonicalTitle") or "انیمه"
 
-    valid_recs = [r.get("mediaRecommendation") for r in recs if r and r.get("mediaRecommendation")]
+    # دریافت مقوله‌ها (Categories) برای یافتن موارد مشابه
+    categories_data = await fetch_kitsu(f"anime/{anime_id}/categories")
+    cat_ids = []
+    if categories_data and categories_data.get("data"):
+        cat_ids = [c["attributes"]["title"] for c in categories_data["data"][:2]]
 
-    if not valid_recs:
-        await update.message.reply_text(f"هیچ پیشنهادی برای <b>{html.escape(str(main_title))}</b> یافت نشد.", parse_mode="HTML")
+    if cat_ids:
+        recs_data = await fetch_kitsu("anime", {
+            "filter[categories]": ",".join(cat_ids),
+            "sort": "-userCount",
+            "page[limit]": 11
+        })
+    else:
+        recs_data = await fetch_kitsu("anime", {"sort": "-userCount", "page[limit]": 11})
+
+    if not recs_data or not recs_data.get("data"):
+        await update.message.reply_text(f"پیشنهادی برای <b>{html.escape(str(main_title))}</b> یافت نشد.", parse_mode="HTML")
         return
 
     text = f"💡 <b>۱۰ انیمه پیشنهادی مشابه با {html.escape(str(main_title))}:</b>\n\n"
-    for i, rec_media in enumerate(valid_recs[:10], 1):
-        rec_title = rec_media.get("title", {}).get("english") or rec_media.get("title", {}).get("romaji") or "نامشخص"
-        score = rec_media.get("meanScore")
-        score_str = f"({score}%)" if score else ""
-        text += f"{i}. <b>{html.escape(str(rec_title))}</b> {score_str}\n"
+    count = 1
+    for item in recs_data["data"]:
+        attr = item["attributes"]
+        rec_title = attr.get("canonicalTitle") or "نامشخص"
+        if item["id"] == anime_id:
+            continue
+        score = f"({attr.get('averageRating')}%)" if attr.get("averageRating") else ""
+        text += f"{count}. <b>{html.escape(str(rec_title))}</b> {score}\n"
+        count += 1
+        if count > 10:
+            break
 
     await update.message.reply_text(text, parse_mode="HTML")
 
 # 4. /top
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    gql_query = """
-    query {
-      Page (page: 1, perPage: 10) {
-        media (type: ANIME, sort: SCORE_DESC, isAdult: false) {
-          title { romaji english }
-          meanScore
-        }
-      }
-    }
-    """
-    data = await fetch_anilist(gql_query, {})
-    if not data or not data.get("Page", {}).get("media"):
+    data = await fetch_kitsu("anime", {"sort": "-averageRating", "page[limit]": 10})
+
+    if not data or not data.get("data"):
         await update.message.reply_text("❌ خطا در دریافت اطلاعات.")
         return
 
-    text = "🏆 <b>۱۰ انیمه برتر تاریخ (AniList):</b>\n\n"
-    for i, item in enumerate(data["Page"]["media"], 1):
-        title = item.get("title", {}).get("english") or item.get("title", {}).get("romaji") or "نامشخص"
-        score = item.get("meanScore", "N/A")
+    text = "🏆 <b>۱۰ انیمه برتر تاریخ (Kitsu):</b>\n\n"
+    for i, item in enumerate(data["data"], 1):
+        attr = item["attributes"]
+        title = attr.get("canonicalTitle") or "نامشخص"
+        score = attr.get("averageRating", "N/A")
         text += f"{i}. <b>{html.escape(str(title))}</b> - ⭐️ {score}/100\n"
 
     await update.message.reply_text(text, parse_mode="HTML")
 
 # 5. /season
 async def season_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now()
-    year = now.year
-    month = now.month
+    data = await fetch_kitsu("anime", {
+        "filter[status]": "current",
+        "sort": "-userCount",
+        "page[limit]": 10
+    })
 
-    if month in [12, 1, 2]:
-        season = "WINTER"
-    elif month in [3, 4, 5]:
-        season = "SPRING"
-    elif month in [6, 7, 8]:
-        season = "SUMMER"
-    else:
-        season = "FALL"
-
-    gql_query = """
-    query ($season: MediaSeason, $seasonYear: Int) {
-      Page (page: 1, perPage: 10) {
-        media (type: ANIME, season: $season, seasonYear: $seasonYear, sort: POPULARITY_DESC, isAdult: false) {
-          title { romaji english }
-          episodes
-          status
-        }
-      }
-    }
-    """
-    
-    data = await fetch_anilist(gql_query, {"season": season, "seasonYear": year})
-    if not data or not data.get("Page", {}).get("media"):
-        await update.message.reply_text("❌ خطا در دریافت اطلاعات فصل.")
+    if not data or not data.get("data"):
+        await update.message.reply_text("❌ خطا در دریافت انیمه‌های فصل.")
         return
 
-    text = f"🍂 <b>انیمه‌های محبوب فصل جاری ({season} {year}):</b>\n\n"
-    for i, item in enumerate(data["Page"]["media"], 1):
-        title = item.get("title", {}).get("english") or item.get("title", {}).get("romaji") or "نامشخص"
-        episodes = item.get("episodes") or "نامشخص"
+    text = "🍂 <b>انیمه‌های محبوب در حال پخش:</b>\n\n"
+    for i, item in enumerate(data["data"], 1):
+        attr = item["attributes"]
+        title = attr.get("canonicalTitle") or "نامشخص"
+        episodes = attr.get("episodeCount") or "نامشخص"
         text += f"{i}. <b>{html.escape(str(title))}</b> (قسمت‌ها: {episodes})\n"
 
     await update.message.reply_text(text, parse_mode="HTML")
@@ -230,33 +186,20 @@ async def manga_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query_str = " ".join(context.args)
-    gql_query = """
-    query ($search: String) {
-      Media (search: $search, type: MANGA) {
-        title { english romaji native }
-        coverImage { extraLarge }
-        meanScore
-        chapters
-        volumes
-        status
-        description
-      }
-    }
-    """
-    
-    data = await fetch_anilist(gql_query, {"search": query_str})
-    if not data or not data.get("Media"):
+    data = await fetch_kitsu("manga", {"filter[text]": query_str, "page[limit]": 1})
+
+    if not data or not data.get("data"):
         await update.message.reply_text("❌ مانگایی با این نام یافت نشد.")
         return
 
-    media = data["Media"]
-    title = media.get("title", {}).get("english") or media.get("title", {}).get("romaji") or "نامشخص"
-    score = f"{media.get('meanScore')}/100" if media.get("meanScore") else "ثبت نشده"
-    chapters = media.get("chapters") or "نامشخص"
-    volumes = media.get("volumes") or "نامشخص"
-    status = media.get("status") or "نامشخص"
-    description = clean_html(media.get("description"))
-    cover_url = media.get("coverImage", {}).get("extraLarge")
+    manga = data["data"][0]["attributes"]
+    title = manga.get("canonicalTitle") or manga.get("titles", {}).get("en") or "نامشخص"
+    score = f"{manga.get('averageRating')}/100" if manga.get("averageRating") else "ثبت نشده"
+    chapters = manga.get("chapterCount") or "نامشخص"
+    volumes = manga.get("volumeCount") or "نامشخص"
+    status = manga.get("status") or "نامشخص"
+    synopsis = clean_text(manga.get("synopsis"))
+    poster_url = manga.get("posterImage", {}).get("original") or manga.get("posterImage", {}).get("large")
 
     caption = (
         f"📖 <b>{html.escape(str(title))}</b>\n\n"
@@ -264,11 +207,11 @@ async def manga_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📚 <b>تعداد چپترها:</b> {chapters}\n"
         f"📦 <b>تعداد جلدها:</b> {volumes}\n"
         f"📌 <b>وضعیت:</b> {status}\n\n"
-        f"📝 <b>خلاصه:</b>\n{html.escape(description)}"
+        f"📝 <b>خلاصه:</b>\n{html.escape(synopsis)}"
     )
 
-    if cover_url:
-        await update.message.reply_photo(photo=cover_url, caption=caption, parse_mode="HTML")
+    if poster_url:
+        await update.message.reply_photo(photo=poster_url, caption=caption, parse_mode="HTML")
     else:
         await update.message.reply_text(caption, parse_mode="HTML")
 
@@ -279,31 +222,19 @@ async def character_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     query_str = " ".join(context.args)
-    gql_query = """
-    query ($search: String) {
-      Character (search: $search) {
-        name { full native }
-        image { large }
-        description
-      }
-    }
-    """
-    
-    data = await fetch_anilist(gql_query, {"search": query_str})
-    if not data or not data.get("Character"):
+    data = await fetch_kitsu("characters", {"filter[name]": query_str, "page[limit]": 1})
+
+    if not data or not data.get("data"):
         await update.message.reply_text("❌ شخصیتی با این نام یافت نشد.")
         return
 
-    char = data["Character"]
-    name = char.get("name", {}).get("full") or "نامشخص"
-    native_name = char.get("name", {}).get("native") or ""
-    description = clean_html(char.get("description"))
-    image_url = char.get("image", {}).get("large")
-
-    full_name = f"{name} ({native_name})" if native_name else name
+    char = data["data"][0]["attributes"]
+    name = char.get("canonicalName") or char.get("name") or "نامشخص"
+    description = clean_text(char.get("description"))
+    image_url = char.get("image", {}).get("original") if char.get("image") else None
 
     caption = (
-        f"👤 <b>{html.escape(str(full_name))}</b>\n\n"
+        f"👤 <b>{html.escape(str(name))}</b>\n\n"
         f"📖 <b>توضیحات:</b>\n{html.escape(description)}"
     )
 
